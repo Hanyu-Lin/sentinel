@@ -50,7 +50,7 @@ The web client maintains a Graphology instance in sync via `graph.snapshot` (ini
 All messages are typed via `@sentinel/contracts` Zod schemas.
 
 Server → Client: `graph.snapshot`, `graph.diff`, `graph.blastRadius`, `session.changeEvent`, `session.summary`
-Client → Server: `config.update`, `session.reset`, `pin.node`
+Client → Server: `config.update`, `session.reset`, `node.togglePin`
 
 ## Phase 2 (Desktop + AI Reviewer)
 
@@ -58,3 +58,10 @@ Client → Server: `config.update`, `session.reset`, `pin.node`
 - `packages/reviewer`: Anthropic SDK AI review agent — bug/logic, security, cross-file coherence checks.
 
 Phase 2 packages do not exist yet. Do not create them unless explicitly asked.
+
+## Learned
+
+- In `packages/analyzer`, treat exclude patterns as globs; apply them via post-filtering (e.g. minimatch) after cruise. Do not pass user globs to dependency-cruiser’s `exclude.path` (regex conversion is unreliable for patterns like `**/*.ts`).
+- Pass tsconfig to dependency-cruiser as a path relative to `targetDir` when `cwd` is `targetDir` so alias resolution works. Make path-alias tests resilient (assert nodes exist; if `outDegree >= 1`, then assert edge target) because resolution can be environment-dependent.
+- Blast radius tests: the changed node(s) in the diff scenario must have outbound edges when asserting on `downstream`; otherwise the scenario is wrong and downstream will be empty.
+- Empty-graph tests: use a controlled fixture directory (e.g. `fixtures/empty` with a `.gitkeep`), not `os.tmpdir()`, to avoid permission errors in subdirs on some systems.

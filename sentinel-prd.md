@@ -1,42 +1,163 @@
 # Sentinel — Product Requirements Document
 
+> **Status:** Phase 1 MVP — finalised  
+> **Last updated:** March 2026  
+> **Purpose:** Project roadmap, design reference, and implementation guide
+
+---
+
 ## Problem Statement
 
-AI coding agents (Claude Code, Cursor, Copilot, Codex) are becoming a primary driver of code changes in modern development workflows. These agents edit files autonomously, often across many modules simultaneously, with no mechanism for the developer to understand the structural consequences of those edits in real time.
+AI coding agents — Claude Code, Cursor, Copilot, Codex — are becoming a primary driver of code changes in modern development workflows. These agents edit files autonomously, often across many modules simultaneously, with no mechanism for the developer to understand the structural consequences of those edits in real time.
 
-Existing review tools (CodeRabbit, Greptile, GitHub code review) are **post-hoc and PR-gated** — they only run once changes are committed. By that point, an AI agent may have introduced cascading dependency breakages across dozens of files that are expensive to untangle.
+Existing review tools (CodeRabbit, Greptile, GitHub code review) are post-hoc and PR-gated. They only run once changes are already committed. By that point, an AI agent may have introduced cascading dependency breakages across dozens of files that are expensive to untangle.
 
 Solo developers working locally with AI agents have no live visibility into:
 
 - Which files have changed and what depends on them
 - How large the blast radius of a given edit actually is
 - Whether a change has created new circular dependencies or broken structural contracts between modules
-- How the agent's edits are propagating through the codebase in real time
+- How the agent's edits are propagating through the codebase as they happen
 
-The result is that developers either pause frequently to mentally trace dependency chains themselves — negating much of the agent's productivity gain — or let the agent run freely and discover structural breakages only when the build fails or tests break.
+The result is that developers either pause frequently to mentally trace dependency chains themselves — negating much of the agent's productivity gain — or they let the agent run freely and discover structural breakages only when the build fails or tests break.
 
 ---
 
 ## Solution
 
-**Sentinel** is an always-on live dependency graph for AI agent sessions. It runs alongside the developer's editor as a local server with a web or desktop UI, watches the target repository for file changes, and maintains a live animated graph of the codebase's dependency structure.
+**Sentinel** is an always-on live dependency graph for AI agent sessions. It runs alongside the developer's editor as a local server with a web UI, watches a target repository for file changes, and maintains a live animated graph of the codebase's dependency structure.
 
-When an AI agent modifies a file, Sentinel:
+When an AI agent modifies files, Sentinel detects the changes within seconds, re-analyzes the affected portions of the dependency graph, computes the union of all downstream blast radii, and focuses the graph canvas on that impact in real time.
 
-1. Detects the change via filesystem watcher (within seconds of save)
-2. Re-analyzes the affected portion of the dependency graph incrementally
-3. Computes the blast radius — every module transitively affected by the change
-4. Animates the impact propagation on the live WebGL graph canvas
-5. Updates node visual states (changed, impacted, circular) in real time
+The developer sees their codebase as a living map — the full graph is always present, and when the agent acts, the blast radius is isolated with everything else stepping back. No mode switches. No UI shifts. The graph just tells you what matters right now.
 
-The developer sees their codebase as a living map — nodes lighting up and edges pulsing as the agent works — providing structural awareness without interrupting the agent's flow.
+Sentinel is not a replacement for the AI agent. It is the developer's spatial awareness while the agent works.
 
-**Incremental rollout:**
+### Incremental rollout
 
-- **Phase 1 (MVP):** Live dependency graph + blast radius animation. Pure structural visibility. No AI review. Solo dev, local only.
-- **Phase 2:** AI reviewer (bug/logic, security, cross-file coherence). Desktop Electron app. Agent hook integration.
+**Phase 1 — MVP (this document)**
+Live dependency graph with blast radius focus. Pure structural visibility. No AI review. Local dev only. Web UI accessed via browser.
 
-Sentinel is not a replacement for the AI agent. It is the solo developer's spatial awareness while the agent works.
+**Phase 2**
+AI reviewer (bug/logic detection, security, cross-file coherence) using Anthropic SDK with streamed findings. Electron desktop app (self-contained, no terminal required). Claude Code agent hook integration (PreToolUse/PostToolUse for pre-warming analysis).
+
+---
+
+## Graph Design
+
+### The full-graph approach
+
+Sentinel always shows the complete dependency graph in Live mode. There is no zoom-to-neighbourhood mode, no semantic zoom, no folder-as-node hierarchy. The full graph is the canvas. This preserves the developer's spatial mental model of the codebase and means nothing ever unexpectedly reorganises.
+
+Relevance is communicated through **visibility**, not layout. When the agent acts, the blast radius is made prominent and everything else recedes. When nothing is active, all nodes are visible at equal weight. The graph layout never changes in response to a change event — only node visibility and color do.
+
+Git diff mode is a separate display context with its own rules. The full-graph principle applies to Live mode only.
+
+### Resting state
+
+When no blast radius is active — before the first change, after a session reset, or after pressing `Esc` — the graph shows all nodes at full visibility in their directory base colors. This is the developer's orientation view: the full codebase structure, readable by directory through color, with hub files visually larger. This is a calm, neutral state. No highlights, no alerts.
+
+### Active state — blast radius focus
+
+When one or more files change within the debounce window, Sentinel computes the **union of all blast radii** and transitions the graph simultaneously. Multiple files changed by the agent in rapid succession are treated as a single change event.
+
+Blast radius nodes (the changed files plus all downstream dependents, transitively) are shown at full visibility with event colors applied. All other nodes recede according to the active `focusMode` setting:
+
+- **`focusMode: hide` (default)** — non-blast-radius nodes are removed from the canvas entirely. The blast radius subgraph is typically 8–20 nodes, readable as a clean dependency diagram. This is the most focused experience.
+- **`focusMode: dim`** — non-blast-radius nodes remain on the canvas at 15% opacity, preserving spatial context of the full graph while keeping the blast radius clearly dominant. Hovering over any dimmed node temporarily restores it to full visibility and shows its label. The node returns to 15% opacity when the mouse leaves.
+
+In `hide` mode there are no ghost nodes to hover. Instead, a persistent **"Show full graph"** button appears in the top-right of the canvas whenever a blast radius is active. Clicking it temporarily reveals all nodes in their base colors at 40% opacity for 3 seconds, then returns to the focused view. This gives the developer a spatial orientation snapshot without a mode switch.
+
+Pressing `Esc` with a blast radius active clears it entirely, returning all nodes to resting-state visibility without resetting the session. Pressing `Esc` again with no blast radius active deselects the current node and closes the detail panel.
+
+### Multi-file change events
+
+When the agent saves multiple files within the 500ms debounce window, Sentinel treats them as a single change event:
+
+- The blast radius is the **union** of all individual blast radii
+- The timeline records one entry listing all changed files (e.g. "3 files changed · +14 downstream")
+- Each changed file node shows its individual event color (green / blue / red)
+- The blast radius count badge shows the total unique downstream nodes across all changes
+- The session stats increment by the total counts for the batch
+
+### Blast radius definition
+
+The blast radius is **strictly downstream** by default — only files that transitively import the changed file are included. Files that the changed file imports are not highlighted.
+
+This is a precise, trustworthy signal. Every highlighted node is one that could genuinely be affected by the change. The developer learns to trust that highlighted = at risk.
+
+**Blast radius direction is configurable** (`blastRadiusDirection: downstream | both`). When set to `both`, upstream nodes (files the changed file imports) are shown alongside downstream nodes but in a visually distinct style — a muted highlight color rather than the full amber event color — so the developer can always tell which direction the risk flows.
+
+### Node color system
+
+Node colors carry two layers of meaning simultaneously. They never conflict — event color takes priority over base color when active, base color shows at all other times.
+
+**Base color — directory ownership (permanent)**
+
+Every node has a base color derived from its top-level directory. Colors are generated automatically at index time using a deterministic hashing algorithm and are stable across restarts.
+
+**Generation algorithm:**
+
+Colors are derived by hashing the directory path string (FNV-1a 32-bit) into a hue value (0–360). Saturation is fixed at 65% and lightness at 58%, tuned for dark-mode readability. A reserved hue avoidance step ensures generated colors never land within 30 hue degrees of any event color. This guarantees every project gets its own consistent palette without manual configuration.
+
+```
+function directoryColor(dirPath: string): string {
+  const hash = fnv1a32(dirPath)
+  const hue = hash % 360
+  const reserved = [120, 220, 0, 40, 25]  // green, blue, red, amber, orange
+  const adjusted = avoidReservedHues(hue, reserved, minDistance: 30)
+  return hsl(adjusted, saturation: 65%, lightness: 58%)
+}
+```
+
+Generated colors are written to `.sentinelrc` on first index. Sentinel only writes to `.sentinelrc` if the file does not already exist, or appends new `directoryColors` entries for directories not yet present — it never overwrites existing configuration. This prevents Sentinel from creating unexpected `git status` noise. The developer can override any directory color by editing `.sentinelrc` directly; manual entries always take precedence over the algorithm.
+
+**Event color — change state (temporary)**
+
+Event colors override the base color for the duration of the active blast radius. They clear on session reset (`⌘⇧R`) or git commit. Pinned nodes retain their event color until explicitly unpinned.
+
+| Event               | Color      | Hex       | Visual treatment                                                                            |
+| ------------------- | ---------- | --------- | ------------------------------------------------------------------------------------------- |
+| Added               | Green      | `#22C55E` | Solid fill, pulse animation on appear                                                       |
+| Modified            | Blue       | `#3B82F6` | Solid fill, pulse animation on change                                                       |
+| Deleted             | Red        | `#EF4444` | Dashed border, fade-out animation on removal                                                |
+| Impacted downstream | Amber      | `#F59E0B` | Solid fill, no animation                                                                    |
+| Impacted upstream   | Muted teal | `#5EAAA8` | Solid fill, lower saturation than downstream — only shown when `blastRadiusDirection: both` |
+| Circular dependency | Orange     | `#F97316` | Solid fill, persistent until resolved                                                       |
+
+**Node size** scales with **in-degree** — the number of files that directly import it. Files imported by many others render larger, making high-risk nodes visually prominent without inspection.
+
+### Edge rendering
+
+Edges have two visual tiers in the resting state:
+
+- **Intra-directory imports** — dim, `0.35` opacity, neutral color
+- **Cross-directory imports** — brighter, `0.6` opacity, neutral color
+
+During an active blast radius, edges along the blast path render at full opacity in the blast color (blue for downstream impact paths, teal for upstream paths, orange for circular cycles). Non-blast edges recede with their connected nodes according to `focusMode`.
+
+### Layout
+
+ForceAtlas2 is the single layout algorithm. It groups tightly coupled files spatially through physics — files that import each other naturally cluster together. Directory base colors reinforce this structure visually without needing boundary shapes.
+
+ForceAtlas2 runs in a Web Worker to avoid blocking the UI thread. Layout is incremental — a graph diff only positions newly added nodes; existing node positions are preserved. An anti-overlap pass (Noverlap) runs after initial index and after diffs that add more than five nodes.
+
+There is no radial mode, no hierarchical mode, and no cluster boundary rendering in Phase 1.
+
+### Circular dependency persistence
+
+Circular dependency edges (orange) are persistent — they survive blast radius transitions, session resets, and `Esc`. They only clear when the circular dependency is resolved in the code and a new graph diff confirms the cycle is gone. The `GraphDiff` type includes both `newCircularDeps` and `resolvedCircularDeps` so clients can add and remove orange edges correctly.
+
+### Session reset behaviour
+
+Two triggers reset the session. Reset clears: blast radius highlights, timeline events, session stats, and unpins all non-pinned nodes. It does not clear circular dependency edges (they are structural, not session state).
+
+1. **Git commit** — Sentinel watches `.git/COMMIT_EDITMSG`. On write, a `session.reset` event is broadcast to all connected clients. The graph returns to resting state with a brief settle animation (500ms) so the developer gets a final glimpse of what the commit contained.
+2. **Manual reset** — `⌘⇧R`. Immediate. No confirmation.
+
+**Pinned nodes** survive a git commit reset. Their event color and blast radius highlight persist until the developer manually unpins them with `P` or triggers a manual `⌘⇧R` reset. This gives the developer explicit control over what carries across commit boundaries.
+
+**Session stats** reflect only the current session. When a commit resets the session, stats return to zero. Pinned nodes' stats are not preserved — only their visual highlight state is.
 
 ---
 
@@ -44,212 +165,314 @@ Sentinel is not a replacement for the AI agent. It is the solo developer's spati
 
 ### Setup & Onboarding
 
-1. As a solo developer, I want to point Sentinel at a repository with a single command, so that I can start a watching session without reading documentation.
-2. As a developer, I want Sentinel to auto-detect my TypeScript config and path aliases, so that the dependency graph resolves correctly without manual configuration.
-3. As a developer, I want to configure which directories and file patterns Sentinel watches and ignores, so that generated files, fixtures, and node_modules don't pollute the graph.
-4. As a developer, I want my configuration stored in a committed `.sentinelrc` file at the repo root, so that setup is repeatable across machines.
-5. As a developer, I want Sentinel to open the UI automatically in my browser when the server starts, so that I don't have to manually navigate to a localhost URL.
-6. As a developer, I want Sentinel to show a clear status indicator (watching / idle / error) in the UI, so that I always know whether the watcher is active.
+1. As a solo developer, I want to open Sentinel and point it at a repository by typing a path or using a native file browser, so that setup takes under a minute with no configuration required.
+2. As a developer, I want Sentinel to index the repository immediately after I select a path, showing a live progress screen listing files as they are discovered and parsed, so that I see the codebase structure taking shape rather than staring at a blank screen.
+3. As a developer, I want Sentinel to auto-detect my TypeScript config and path aliases from `tsconfig.json`, so that the dependency graph resolves correctly without any manual configuration.
+4. As a developer, I want Sentinel to open the graph UI in my browser automatically when the server starts, so that I never have to navigate to a localhost URL manually.
+5. As a developer, I want recently opened repositories to appear on the start screen as one-click shortcuts, so that returning to a project takes one click.
+6. As a developer, I want to configure which directories and file patterns Sentinel ignores in `.sentinelrc`, so that generated files, test fixtures, and node_modules never appear in the graph.
+7. As a developer, I want `.sentinelrc` committed to the repo, so that settings are version-controlled and any machine running Sentinel against the same repo gets identical behaviour. I want Sentinel to never overwrite existing `.sentinelrc` content — only append new entries for directories not yet configured.
+8. As a developer, I want Sentinel to show a persistent status indicator (watching / idle / error) in the UI, so that I always know whether the file watcher is active.
 
-### Live Dependency Graph
+### Live Dependency Graph — Resting State
 
-7. As a solo developer using an AI agent locally, I want to see my repository's full dependency graph rendered as an interactive WebGL canvas, so that I have a structural map of my codebase at all times while the agent is editing.
-8. As a developer, I want the graph to show files as nodes and import relationships as directed edges, so that I can see which modules depend on which.
-9. As a developer, I want the graph to update within two seconds of a file being saved, so that I can see structural consequences before issuing the next agent instruction.
-10. As a developer, I want the initial graph layout to use ForceAtlas2 so that tightly coupled clusters of files naturally group together, making the codebase's architecture visually legible.
-11. As a developer, I want nodes to be automatically clustered by their directory or package, so that the graph reflects my project's actual structure rather than a flat collection of files.
-12. As a developereen a high-level overview and a focused view of a specific module cluster.
-13. As a developer, I want to drag individual nodes to reposition them, so that I can manually arrange areas of the graph important to my current task.
-14. As a developer, I want my layout positions and zoom level to persist between sessions, so that I don't have to re-navigate every time I restart Sentinel.
-15. As a developer, I want to search the graph by filename, so that I can jump directly to any node without manually panning.
-16. As a developer, I want to filter the graph to show only a specific package or directory, so that I can reduce visual noise when the agent is working in a focused area.
-17. As a developer, I want node sizes to scale with the number of dependents, so that high-impact hub files are visually prominent without me needing to inspect each node.
+9. As a developer, I want to see my repository's full dependency graph as an interactive WebGL canvas showing all files as nodes and all import relationships as directed edges, so that I have a complete structural map of my codebase at all times.
+10. As a developer, I want nodes colored by their top-level directory using auto-generated colors, so that I can read the codebase's architectural boundaries at a glance without any configuration.
+11. As a developer, I want cross-directory edges to render slightly brighter than intra-directory imports, so that coupling across architectural boundaries is visually apparent without any additional UI elements.
+12. As a developer, I want node sizes to scale with the number of files that directly import them, so that high-impact hub files are visually prominent without me needing to inspect them individually.
+13. As a developer, I want the graph laid out with ForceAtlas2 so that tightly coupled files cluster spatially, making the codebase's architecture legible through proximity and color together.
+14. As a developer, I want to zoom and pan the graph fluidly, so that I can move between a high-level overview and a focused view of any area at any time.
+15. As a developer, I want to drag individual nodes to reposition them, so that I can manually arrange areas of the graph that matter for my current task.
+16. As a developer, I want my layout positions and zoom level to persist between sessions, so that I don't have to re-navigate every time I restart Sentinel.
+17. As a developer, I want to search the graph by filename with `⌘F`, so that I can jump directly to any node without panning.
+18. As a developer, I want to click a directory in the left rail to focus the graph on that directory — hiding all other nodes — independently of any active blast radius, so that I can manually explore one area of the codebase at any time.
 
-### Blast Radius & Change Visualization
+### Blast Radius — Active State
 
-18. As a developer, I want changed nodes to visually pulse or highlight the moment a file is saved, so that I immediately see which part of the graph the agent just touched.
-19. As a developer, I want edges to animate outward from a changed node to its dependents to show dependency propagation, so that I can watch the blast radius expand visually rather than reading a list.
-20. As a developer, I want directly changed files and transitively impacted files to use distinct visual treatments (different colors or intensity), so that I can distinguish first-order from second-order effects at a glance.
-21. As a developer, I want to see a numeric blast radius count displayed on or near a changed node (e.g. "14 affected"), so that I have an immediate quantitative measure of how wide the impact is.
-22. As a developer, I want the blast radius highlight to fade out gradually after a configurable idle timeout, so that the graph returns to a calm baseline between agent edits rather than accumulating stale highlights.
-23. As a developer, I want to click a changed or impacted node to pin its blast radius highlight open, so that I can keep a specific change's context visible while I think about it.
-24. As a developer, I want to switch to a radial layout centered on the most recently changed file, so that I can see its full dependency web in a spoke-and-hub view optimized for blast radius analysis.
-25. As a developer, I want a timeline strip at the bottom of the canvas showing the last N file change events in chronological order, so that I can review the sequence of edits the agent has made this session.
-26. As a developer, I want to click any item in the timeline to re-highlight that change event on the graph, so that I can revisit a past edit without restarting the session.
+19. As a developer, I want the graph to immediately focus on the blast radius when a file change is detected, receding all non-affected nodes according to my `focusMode` setting (hidden by default), so that my attention goes directly to what was affected without any manual action.
+20. As a developer, I want the changed file to pulse with its event color (green for added, blue for modified) at the moment the change is detected, so that I can see the exact origin of the change instantly.
+21. As a developer, I want edges to animate outward from the changed node through its downstream dependents in sequence, so that I can watch the blast radius propagate as a visual wave rather than all nodes appearing simultaneously.
+22. As a developer, I want directly changed files and transitively impacted downstream files to use distinct colors (blue vs amber), so that I can distinguish first-order changes from downstream effects at a glance.
+23. As a developer, I want a blast radius count shown on the changed node (e.g. "+8 downstream"), so that I have an immediate quantitative measure of the impact.
+24. As a developer, I want a "Show full graph" button to appear in the canvas when `focusMode` is `hide`, so that I can see a spatial overview of the full graph for 3 seconds without switching modes or losing the blast radius context.
+25. As a developer, I want the `focusMode` (hide or dim) to be configurable in `.sentinelrc`, so that I can choose the level of context I prefer during blast radius focus. In `dim` mode I want to hover over any dimmed node to temporarily restore it to full visibility.
+26. As a developer, I want the blast radius direction (downstream only vs both directions) to be configurable in `.sentinelrc`, defaulting to downstream, so that I can opt in to also seeing upstream context when useful.
+27. As a developer, I want newly created files to animate into the graph as new green nodes, so that I can see when the agent is adding modules to the codebase.
+28. As a developer, I want deleted files to animate out of the graph with their edges dissolving, so that I can see when the agent removes modules and identify any newly dangling dependencies.
+29. As a developer, I want multiple files changed within the same debounce window to be treated as a single change event, showing a union of their blast radii, so that rapid agent edits produce one coherent focused view rather than overlapping flash states.
 
 ### Node & Edge Detail
 
-27. As a developer, I want to hover over any node to see a tooltip showing its filename, package, number of direct dependents, and current state, so that I can get context without a full click-through.
-28. As a developer, I want to click any node to open a detail panel showing its full import list, the full list of modules that import it, and its change history in this session, so that I can investigate any file's structural role thoroughly.
-29. As a developer, I want to hover over any edge to see which specific import statement it represents, so that I understand the nature of a dependency relationship.
-30. As a developer, I want newly created files to animate into the graph as new nodes, so that I can see when the agent is adding modules to the codebase.
-31. As a developer, I want deleted files to animate out of the graph with their edges dissolving, so that I can see when the agent removes modules and which dependencies are now dangling.
+30. As a developer, I want to hover over any visible node to see a tooltip showing its filename, directory, number of direct importers, and current event state, so that I can get context without opening the detail panel.
+31. As a developer, I want to click any node to open a detail panel with three tabs — Dependencies, Symbols, and History — so that I can investigate any file at the depth I need without leaving the UI.
+32. As a developer, I want the Dependencies tab to show the file's full import list and the complete list of files that import it, so that I understand its full structural position in the dependency graph.
+33. As a developer, I want the Symbols tab to show the functions, classes, and types exported by the file and how many other files reference each one, so that I can understand the file's public API and its usage across the codebase. Symbol-level change tracking (which symbols changed in the current session) is a Phase 2 capability requiring AST analysis.
+34. As a developer, I want the History tab to show all changes made to this file in the current session with timestamps and blast radius counts, so that I have a per-file audit trail of the agent's work.
+35. As a developer, I want to hover over any edge to see a tooltip identifying the source file, target file, and import type (named / default / side-effect), so that I understand the precise nature of a dependency relationship.
+36. As a developer, I want to press `P` on a selected node to toggle its pin state, so that I can keep its blast radius highlight across git commit resets while I investigate related changes.
 
 ### Circular Dependency Detection
 
-32. As a developer, I want circular dependencies to be visually distinguished with red edges, so that I immediately notice if the agent has introduced one.
-33. As a developer, I want a toast notification to appear when a new circular dependency is detected, so that I'm alerted even if I'm not looking at the relevant part of the graph.
-34. As a developer, I want to click a circular dependency edge to see the full cycle path listed (A → B → C → A), so that I can understand exactly which files are involved without leaving the UI.
-35. As a developer, I want circular dependencies to remain visually flagged even after the blast radius animation fades, so that they persist as a warning state until I resolve them.
+37. As a developer, I want circular dependencies shown as persistent orange edges that remain visible in both resting and active states, so that structural problems introduced by the agent are always visible regardless of what else is happening.
+38. As a developer, I want a toast notification when a new circular dependency is introduced, so that I am alerted immediately even if I am not looking at the relevant area of the graph.
+39. As a developer, I want to click a circular dependency edge to see the full cycle listed (A → B → C → A) in the detail panel, so that I can understand exactly which files are involved without leaving the UI.
+40. As a developer, I want circular dependency edges to automatically clear when the cycle is resolved in the code and a new graph analysis confirms the dependency is gone, so that the graph stays accurate without requiring manual dismissal.
 
-### Cluster & Layout Modes
+### Session Management & Timeline
 
-36. As a developer, I want to switch between cluster modes — by directory, by blast radius ring depth, by coupling density — so that I can reframe the graph around whatever question I'm currently investigating.
-37. As a developer, I want to switch between layout modes — force-directed (default), hierarchical (import chain top-down), radial (selected node at center) — so that I can choose the most legible view for a given analysis task.
-38. As a developer, I want layout transitions to animate smoothly when I switch modes, so that spatial continuity is preserved and I don't lose my sense of where nodes are.
-39. As a developer, I want the graph to run an anti-overlap pass after layout computation, so that dense clusters remain readable and nodes don't stack on top of each other.
+41. As a developer, I want a timeline strip showing all change events this session in chronological order, so that I can review the complete sequence of the agent's edits.
+42. As a developer, I want each timeline event to show the filename(s) changed, event type(s) (added / modified / deleted), total blast radius count, and elapsed time, so that I can scan the full session history at a glance including multi-file batch events.
+43. As a developer, I want to click any timeline event to re-activate that change's blast radius on the graph, so that I can revisit any past edit without restarting the session.
+44. As a developer, I want a session stats panel showing total files added, modified, deleted, and total unique downstream nodes impacted this session, so that I can see the cumulative scope of the agent's work.
+45. As a developer, I want to reset the session with `⌘⇧R`, clearing all blast radius highlights, timeline events, session stats, and unpinning all nodes including pinned ones, so that I start a fully clean slate for a new agent task.
+46. As a developer, I want the session to reset automatically when Sentinel detects a git commit, returning the graph to resting state, so that each commit represents a natural session boundary.
+47. As a developer, I want pinned nodes to survive a git commit reset and only fully clear on a manual `⌘⇧R`, so that I remain in control of what context carries across commit boundaries.
 
-### Agent Hook Integration
+### Git Diff Mode
 
-40. As a developer using Claude Code, I want Sentinel to register a PreToolUse hook so it receives advance notice of which file the agent is about to edit, so that blast radius analysis is pre-computed and ready the instant the filesystem change arrives.
-41. As a developer using Claude Code, I want Sentinel to register a PostToolUse hook so it can correlate filesystem changes back to the specific agent tool call that caused them, so that the change timeline can attribute each edit to the correct agent action.
-42. As a developer, I want agent hook integration to be optional and additive — Sentinel must work fully via filesystem watching alone — so that it functions with any agent that writes files regardless of hook support.
-43. As a developer, I want the change timeline to show which agent tool call triggered each edit (when hook data is available), so that I can understand the agent's intent behind each structural modification.
+48. As a developer, I want to switch between Live mode and Git diff mode from a toggle in the topbar, so that I can compare any two commits on the same graph canvas without opening a terminal.
+49. As a developer, I want to pick two commits from a visual commit log showing the git graph spine, commit hash, message, branch label, author, and date, so that I have enough context to identify the right checkpoints at a glance.
+50. As a developer, I want to click a commit in the log to set it as the base, and Shift+click to set it as the head, so that selecting a range is fast and requires no dropdowns or confirmation dialogs.
+51. As a developer, I want the graph in diff mode to show only the files that changed between the two commits, hiding unchanged nodes, using the same event colors as live mode (green = added, blue = modified, red = removed), so that I read a commit diff exactly the same way I read a live change.
+52. As a developer, I want a summary line under the commit selectors showing counts of added, modified, and removed files and how many commits apart the selections are, so that I can orient myself before reading the graph.
+53. As a developer, I want the session timeline, session stats, and reset controls to be hidden in diff mode, since those are live-session concepts that do not apply to a static commit comparison.
 
-### Session Awareness
+### Keyboard & Command Palette
 
-44. As a developer, I want a live session summary panel showing total files changed, total unique nodes impacted, and largest single blast radius in this session, so that I have a high-level picture of the agent's cumulative impact.
-45. As a developer, I want the session summary to update in real time as the agent makes more changes, so that I can watch the scope of the session grow.
-46. As a developer, I want to reset the session counters and highlights without restarting Sentinel, so that I can start a clean visual slate for a new agent task within the same project.
-47. As a developer, I want the session change history to be persisted to disk, so that I can review what the agent did in a previous session after restarting Sentinel.
-
-### Desktop App — Phase 2
-
-48. As a developer, I want Sentinel to be available as a standalone desktop app, so that I don't need to keep a terminal window open to use it.
-49. As a developer, I want the desktop app to remember recently watched repositories and let me switch between them from a menu, so that I can move between projects without reconfiguring.
-50. As a developer, I want the desktop app to show a tray icon indicating Sentinel's current status (watching, idle, change detected), so that I know it's running without the window needing focus.
-51. As a developer, I want the desktop app to send a native OS notification when a large blast radius change is detected (configurable threshold), so that I'm alerted even when the Sentinel window is in the background.
-52. As a developer, I want the desktop app to auto-update, so that I always have the latest capabilities without manual reinstalls.
-
-### AI Reviewer — Phase 2
-
-53. As a developer, I want changed files to be automatically queued for AI review on every save, so that I get feedback without manually triggering anything.
-54. As a developer, I want AI review results to stream back to the UI progressively, so that findings appear as they are generated rather than waiting for a full batch.
-55. As a developer, I want nodes currently being reviewed to show a distinct shimmer animation, so that I can see which files are actively being analyzed.
-56. As a developer, I want nodes with AI findings to be color-coded by severity (warning = yellow, error = red, info = blue), so that I can triage issues at a glance from the graph.
-57. As a developer, I want to open a review panel for any flagged node showing the full finding with line references, explanation, and suggested fix, so that I can act on feedback immediately.
-58. As a developer, I want the AI reviewer to detect logic errors and potential bugs in changed files, so that I catch issues the agent introduced before they reach a PR.
-59. As a developer, I want the AI reviewer to fla, I want to zoom and pan the graph fluidly, so that I can navigate betwg security vulnerabilities in changed files, so that I don't accidentally ship a security issue introduced by an agent.
-60. As a developer, I want the AI reviewer to perform a cross-file coherence check verifying that all callers of a modified function have been updated consistently, so that I catch silent contract breakages the agent didn't address.
-61. As a developer, I want to bring my own Anthropic API key, so that I control the model and cost.
-62. As a developer, I want to configure which review passes are enabled and whether they run automatically on save or only on demand, so that I can tune the tool to my preferred balance of depth and speed.
+54. As a developer, I want a command palette accessible with `⌘K` that gives me access to all navigation, actions, and keyboard shortcut discovery in one place, so that I can drive the entire UI from the keyboard without memorising shortcuts.
+55. As a developer, I want to cycle through all changed nodes in the current session using `Tab`, so that I can review each change sequentially without touching the mouse.
+56. As a developer, I want to navigate timeline events with `←` and `→` arrow keys, so that I can step through session history from the keyboard.
+57. As a developer, I want to search the graph by filename with `⌘F`, so that I can jump directly to any node without panning.
+58. As a developer, I want to press `P` on a selected node to toggle its pin state, so that I can pin or unpin without using the mouse.
+59. As a developer, I want to press `Space` to fit the entire graph to the screen, so that I can reset my view instantly after zooming or panning.
+60. As a developer, I want `Esc` to have two stages: first press clears the active blast radius (returning to resting state); second press deselects the current node and closes the detail panel, so that dismissing UI state is always one or two keypresses away and never requires the mouse.
 
 ---
 
 ## Implementation Decisions
 
-### Monorepo Architecture
+### Monorepo architecture
 
-- **Turborepo + Bun** monorepo with the following workspace structure:
-  - `apps/web` — React 19 + Vite frontend (graph canvas + detail panels)
-  - `apps/server` — Node.js WebSocket server (file watcher + analysis orchestrator)
-  - `apps/desktop` — Electron wrapper (Phase 2)
-  - `packages/contracts` — Zod schemas for all WebSocket message types. Schema-only, zero runtime logic.
-  - `packages/analyzer` — dependency-cruiser + Graphology graph diffing + blast radius engine
-  - `packages/reviewer` — Anthropic SDK AI review agent (Phase 2)
-  - `packages/shared` — shared utilities, impact scoring, graph serialization helpers
+Turborepo monorepo managed with Bun. Strict layer separation — each package has a single responsibility and a stable public interface. No package imports from an app. Apps import from packages only.
 
-- Strict layer separation: each package has a single responsibility and a stable external interface. The server and desktop app both import `packages/analyzer` and `packages/reviewer` directly — shared code, not HTTP calls between processes.
+```
+apps/
+  web/        React 19 + Vite — all UI: graph canvas, panels, timeline, onboarding
+  server/     Node.js — WebSocket server, file watcher, analysis orchestrator
+
+packages/
+  contracts/  Zod schemas for all WebSocket messages. Schema-only — zero runtime logic.
+  analyzer/   dependency-cruiser + Graphology — graph building, diffing, blast radius
+  shared/     Utilities: debounce, color generation, graph serialization, session helpers
+  reviewer/   Scaffolded empty in Phase 1. Implemented in Phase 2.
+```
+
+### Tooling
+
+| Concern                   | Tool                         |
+| ------------------------- | ---------------------------- |
+| Package manager + runtime | Bun                          |
+| Monorepo orchestration    | Turborepo                    |
+| Language                  | TypeScript 5.7 (strict mode) |
+| Linting                   | oxlint                       |
+| Testing                   | Vitest                       |
+| Schema validation         | Zod                          |
 
 ### Server (`apps/server`)
 
-- **chokidar** watches the target repository. On file save, a debounced pipeline triggers (default: 500ms debounce to batch rapid sequential saves).
-- The pipeline is: detect changed files → run dependency-cruiser on the affected scope → diff the Graphology graph (previous snapshot vs. new) → compute blast radius via transitive traversal → broadcast results over WebSocket.
-- **WebSocket messages** are typed via `packages/contracts` Zod schemas. All outbound messages are validated before broadcast.
-- **Bun's native SQLite** (`bun:sqlite`) persists the session change history so the timeline survives page reloads without a separate database process.
-- **Agent hook endpoint**: an optional HTTP endpoint accepts Claude Code PreToolUse/PostToolUse payloads. This is additive — the filesystem watcher is always the primary trigger.
+- **chokidar** watches the target repository with a 500ms debounce. Multiple file saves within the window are batched into a single analysis cycle.
+- On each debounced trigger: run dependency-cruiser on all changed files → diff the Graphology graph → compute the union blast radius via BFS traversal → broadcast all results over WebSocket as a single `graph.diff` event.
+- **Bun SQLite** (`bun:sqlite`) persists session change history so the timeline survives page reloads without a separate database process.
+- **Git commit detection**: chokidar watches `.git/COMMIT_EDITMSG`. On write, broadcast `session.reset` to all connected clients after a 500ms delay (to allow any in-flight file change events to complete first).
+- **Agent hook endpoint**: an HTTP endpoint for Claude Code PreToolUse/PostToolUse payloads is present in Phase 1 but returns 204 and no-ops. Activated in Phase 2.
+- All outbound WebSocket messages are validated against `packages/contracts` Zod schemas before broadcast. Invalid messages are logged and dropped, never sent.
 
 ### Analyzer (`packages/analyzer`)
 
-- **dependency-cruiser** produces the raw dependency graph as JSON. Configured to respect the project's tsconfig path aliases and exclude patterns from `.sentinelrc`.
-- **Graphology** is the canonical in-memory graph data structure. The analyzer maintains a `previousGraph` snapshot and a `currentGraph`. On each cycle it diffs the two producing a typed `GraphDiff` object: `{ addedNodes, removedNodes, addedEdges, removedEdges, modifiedNodes }`.
-- **graphology-communities-louvain** runs community detection to produce cluster assignments. Re-runs when the graph structure changes significantly — not on every single-file save.
-- **graphology-shortest-path** computes the blast radius: all nodes reachable from a changed node following dependency edges.
-- **graphology-metrics** computes betweenness centrality to identify hub files (high-risk nodes that many others depend on), used to scale node sizes in the UI.
-- All output types (`GraphDiff`, `BlastRadius`, `GraphNode`, `GraphEdge`) are defined in `packages/contracts`.
+- **dependency-cruiser** produces the raw dependency graph as structured JSON. Configured to respect tsconfig path aliases and `.sentinelrc` exclude patterns.
+- **Graphology** is the canonical in-memory graph. The analyzer maintains `previousGraph` and `currentGraph` snapshots. Each analysis cycle produces a typed `GraphDiff`:
 
-### WebSocket Protocol
+```ts
+type GraphDiff = {
+  addedNodes: GraphNode[];
+  removedNodes: string[]; // node IDs
+  modifiedNodes: GraphNode[];
+  addedEdges: GraphEdge[];
+  removedEdges: string[]; // edge IDs
+  newCircularDeps: CircularDep[];
+  resolvedCircularDeps: string[]; // cycle IDs no longer present
+  blastRadius: {
+    downstream: string[]; // node IDs impacted downstream
+    upstream: string[]; // node IDs impacted upstream — empty when blastRadiusDirection is "downstream"
+    changedNodeIds: string[]; // the directly changed files
+  };
+};
+```
 
-All messages are typed via `packages/contracts` Zod schemas.
+- **Blast radius** is computed using **BFS traversal** (`graphology-traversal`) following directed edges from each changed node. `graphology-shortest-path` is not used here — blast radius requires finding all reachable nodes, not the shortest path between two specific nodes.
+- When `blastRadiusDirection: "both"`, a second BFS traversal runs in the reverse direction to find upstream nodes. Upstream results are stored separately in `blastRadius.upstream` so the client can apply distinct styling.
+- **In-degree** (direct import count) is computed per node and stored as a node attribute. Used for visual node size scaling. Recomputed on full graph rebuild and whenever a node's in-degree changes in a diff.
+- **Circular dependency detection** runs as a strongly-connected-components pass on each diff. New cycles are included in `newCircularDeps`; resolved cycles in `resolvedCircularDeps`.
+- All output types are defined in `packages/contracts`.
 
-Server → client messages:
+### WebSocket protocol
 
-- `graph.snapshot` — full serialized graph on initial connection or reconnection
-- `graph.diff` — incremental node/edge changes
-- `graph.blastRadius` — blast radius payload for a specific change event
-- `session.changeEvent` — a single file change entry (path, timestamp, agent tool call if available, blast radius count)
-- `session.summary` — rolling session stats update
+All messages are Zod-typed. The server validates outbound messages before sending. The client validates inbound messages before applying.
 
-Client → server messages:
+**Server → client**
 
-- `config.update` — change watch settings at runtime
-- `session.reset` — clear session counters and highlights
-- `pin.node` — pin a node's blast radius highlight open
+| Message               | Payload                                                                                 | When                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `graph.snapshot`      | Full serialized graph, all node attributes, session history, active circular deps       | Initial connection, reconnection                                                                 |
+| `graph.diff`          | Full `GraphDiff` including blast radius node ID lists (downstream + upstream + changed) | Each debounced change event (one event per debounce batch, regardless of how many files changed) |
+| `session.changeEvent` | Changed file paths, event types, blast radius counts (downstream + upstream), timestamp | Same trigger as `graph.diff` — sent together                                                     |
+| `session.summary`     | Cumulative session stats                                                                | After each change event                                                                          |
+| `session.reset`       | —                                                                                       | Git commit detected, or manual reset                                                             |
+
+**Client → server**
+
+| Message          | Payload               | When                         |
+| ---------------- | --------------------- | ---------------------------- |
+| `config.update`  | Partial config fields | Runtime settings change      |
+| `session.reset`  | —                     | `⌘⇧R` pressed                |
+| `node.togglePin` | `{ nodeId: string }`  | `P` pressed on selected node |
+
+Note: hover state is managed entirely client-side. No hover messages are sent to the server — the server does not hold or need visibility state.
 
 ### Graph UI (`apps/web`)
 
-- **Sigma.js** is the WebGL graph renderer. **@react-sigma/core** provides React lifecycle bindings (mount, unmount, event handlers).
-- **Graphology** is the client-side graph data model, kept in sync with the server via `graph.snapshot` and `graph.diff` WebSocket messages. The client never recomputes the graph — it only applies diffs.
-- **graphology-layout-forceatlas2** runs the layout algorithm in a **Web Worker** to avoid blocking the UI thread. Layout runs incrementally on diff — only nodes affected by a change are repositioned, not the full graph.
-- **graphology-layout-noverlap** runs an anti-overlap pass after ForceAtlas2 to prevent dense clusters from stacking.
-- Node visual state is stored as a `state` attribute on each Graphology node (`neutral` | `changed` | `impacted` | `circular`). Sigma's custom node renderer reads this attribute and applies the correct color, size multiplier, and animation.
-- **sigma-animation** handles smooth transitions between node states (color interpolation over ~300ms) so state changes feel live rather than jarring.
-- **zustand** manages all client-side state: the Graphology instance, selected node, active cluster mode, active layout mode, filter state, pinned nodes, session summary, timeline events.
-- **framer-motion** handles all animations outside the canvas: detail panel slide-in, toast notifications, timeline strip, cluster mode transition overlays.
-- **@tanstack/react-query** fetches the initial graph snapshot and session history on mount. All subsequent graph updates arrive via WebSocket.
-- **@tanstack/react-router** handles routing between the main graph view, session history, and settings.
+- **Sigma.js** is the WebGL renderer. **@react-sigma/core** provides React lifecycle bindings (mount, unmount, sigma instance access, event handlers).
+- **Graphology** is the client-side data model. The client applies `graph.diff` payloads only — it never independently recomputes the graph.
+- **graphology-layout-forceatlas2** runs in a **Web Worker**. Only newly added nodes are positioned on each diff; existing node positions are preserved. An anti-overlap pass (Noverlap) runs after initial index and after diffs adding more than five nodes.
+- Each node stores two color attributes: `baseColor` (directory, permanent) and `eventColor` (change state, null when inactive). Sigma's custom node renderer uses `eventColor` when set, `baseColor` otherwise.
+- **Visibility management**: each node has a `visible` boolean attribute. When a blast radius activates, the renderer sets `visible = false` on all non-blast-radius nodes (in `hide` mode) or `opacity = 0.15` (in `dim` mode). Sigma's reducer skips invisible nodes entirely — they consume no render budget. In `dim` mode, a `hoverVisible` attribute temporarily overrides opacity to 1.0 for a single node on hover.
+- **"Show full graph" button**: rendered as an HTML overlay element above the Sigma canvas. Visible only in `hide` mode when a blast radius is active. On click, temporarily sets all node `visible = true` and `opacity = 0.4` for 3 seconds, then restores the blast radius focus state.
+- **sigma-animation** interpolates color and size transitions over ~300ms so state changes feel live rather than jarring.
+- **zustand** manages all client state: Graphology instance, active blast radius node IDs (downstream + upstream + changed), pinned node IDs, hover node ID, directory filter, diff mode state, session summary, timeline events, `focusMode` value.
+- **framer-motion** handles all off-canvas animations: detail panel slide-in, toast notifications for new circular deps, timeline strip entry animations.
+- **@tanstack/react-query** fetches the initial `graph.snapshot` on mount and handles reconnection with exponential backoff.
+- **@tanstack/react-router** handles routing: `/` (graph), `/settings`, `/diff`.
 - **Tailwind CSS v4 + shadcn/ui** for all non-canvas UI components.
 
-### Electron Desktop (`apps/desktop`) — Phase 2
+### Settings exposed via `.sentinelrc`
+
+Sentinel writes `.sentinelrc` only on first index (file does not exist) or to append new `directoryColors` entries. It never overwrites or removes existing entries.
+
+```jsonc
+{
+  // Directories and glob patterns to exclude from the graph
+  "exclude": ["**/node_modules", "**/dist", "**/*.test.ts", "**/*.spec.ts"],
+
+  // How non-blast-radius nodes appear during an active blast radius
+  // "hide" (default) — nodes removed from canvas; "Show full graph" button available
+  // "dim"            — nodes remain at 15% opacity; hover to inspect individually
+  "focusMode": "hide",
+
+  // Which direction to traverse for blast radius computation
+  // "downstream" (default) — files that import the changed file, transitively
+  // "both"                 — also shows files the changed file imports (upstream), in muted teal
+  "blastRadiusDirection": "downstream",
+
+  // Directory base colors — auto-generated on first index, fully overridable.
+  // Delete an entry to force regeneration from the hash algorithm on next start.
+  "directoryColors": {
+    "apps/api": "#7B6FE8",
+    "apps/web": "#3DBFA0",
+    "packages/contracts": "#D4A847",
+    "packages/shared": "#5B9BD5",
+  },
+}
+```
+
+### Electron desktop (`apps/desktop`) — Phase 2
 
 - Electron wraps `apps/web` via `BrowserWindow`.
-- A preload script exposes an IPC bridge (`contextBridge`) for native capabilities: file dialog to select the target repo, system tray icon, OS notifications for large blast radius events.
-- The Electron main process spawns `apps/server` as a child process — the desktop app is fully self-contained with no separate terminal required.
-- `electron-updater` handles auto-updates from GitHub Releases.
-- `electron-vite` for fast HMR during development of both the main process and renderer.
+- Preload IPC bridge exposes: native file picker (repo selection), system tray with status icon, OS notifications when blast radius exceeds a configurable threshold.
+- Electron main process spawns `apps/server` as a managed child process. Fully self-contained — no terminal or `npm start` required.
+- `electron-updater` for auto-updates from GitHub Releases.
+- `electron-vite` for HMR in both main process and renderer during development.
 
 ---
 
 ## Testing Decisions
 
-**Philosophy**: tests verify only external behavior and observable outputs, never internal implementation details. A test must survive a complete internal refactor as long as the public interface contract holds.
+**Philosophy:** Tests verify only external behavior and observable outputs, never internal implementation details. A test must survive a complete internal refactor as long as the public interface contract holds.
 
-### Modules to Test
+### `packages/analyzer` — highest priority
 
-**`packages/analyzer`** — highest priority. Pure functions with deterministic outputs. The most critical correctness surface in the entire system.
+Pure functions with deterministic outputs. The most critical correctness surface in the system.
 
-- Given a set of TypeScript source files, the analyzer produces the correct dependency graph (expected nodes and edges).
-- Given two consecutive graph states, the diff engine produces the correct `GraphDiff` (added/removed nodes and edges accurately identified).
-- Given a changed node, the blast radius computation returns the correct complete set of transitively affected nodes.
-- Circular dependencies are detected and present in the graph output.
-- TypeScript path aliases configured in tsconfig are correctly resolved.
-- The analyzer correctly handles file deletion (node removed, dangling edges cleaned up).
-- The analyzer correctly handles file creation (new node added with correct edges).
+- Given a set of TypeScript source files, the analyzer produces the correct dependency graph (nodes and edges match expected structure).
+- Given two consecutive graph states, the diff engine produces the correct `GraphDiff` (additions, removals, modifications accurately identified, including cross-directory edge classification).
+- Given a single changed node with `blastRadiusDirection: "downstream"`, BFS traversal returns the complete correct set of downstream nodes — and only those nodes. No upstream nodes appear.
+- Given `blastRadiusDirection: "both"`, BFS traversal returns separate downstream and upstream node sets. A node that is both upstream and downstream appears in both lists.
+- Multiple changed nodes in a single diff produce a blast radius that is the union of individual blast radii with no duplicates.
+- Circular dependencies are detected and present in `GraphDiff.newCircularDeps`.
+- A resolved circular dependency appears in `GraphDiff.resolvedCircularDeps` and is absent from `newCircularDeps`.
+- TypeScript path aliases are correctly resolved.
+- File deletion: node removed, `removedNodes` populated, dangling edges present in `removedEdges`.
+- File creation: new node in `addedNodes` with correct outbound edges in `addedEdges`.
+- In-degree is correctly computed for all nodes and updates correctly when edges are added or removed.
 
-**`packages/contracts`** — schema contract tests:
+### `packages/contracts` — schema contract tests
 
-- Every defined Zod schema correctly accepts valid inputs and rejects invalid inputs.
-- Round-trip test: serialize a valid message to JSON and parse it back, assert structural equality.
-- Any message that would be broadcast over WebSocket must pass schema validation.
+- Every Zod schema accepts valid inputs and rejects invalid inputs with correct error shapes.
+- Round-trip: serialize any valid message to JSON and parse it back, assert structural equality.
+- `GraphDiff` schema correctly validates both `newCircularDeps` and `resolvedCircularDeps` fields.
+- `blastRadius.downstream` and `blastRadius.upstream` are both required arrays (empty when not applicable, never absent).
+- All WebSocket message types the server broadcasts have a corresponding schema.
 
-**`apps/server`** — integration tests:
+### `apps/server` — integration tests
 
-- A file save event triggers a `graph.diff` WebSocket broadcast with the correct diff within the debounce window.
-- A newly introduced circular dependency triggers a graph update that correctly identifies the cycle.
-- WebSocket messages are validated against `contracts` schemas before broadcast (invalid messages are logged and dropped, not sent).
-- Session history is correctly written to and read from SQLite across a server restart.
+- Multiple file saves within 500ms produce a single `graph.diff` broadcast, not multiple.
+- A single file save produces a `graph.diff` broadcast within 600ms of the save.
+- A `.git/COMMIT_EDITMSG` write triggers a `session.reset` broadcast after 500ms.
+- A newly introduced circular dependency appears in `GraphDiff.newCircularDeps`.
+- A resolved circular dependency appears in `GraphDiff.resolvedCircularDeps`.
+- Invalid outbound messages are dropped and logged, not sent.
+- Session history written to SQLite survives a server restart and is correctly returned in the next `graph.snapshot`.
+- The agent hook endpoint returns 204 and does not affect graph state in Phase 1.
+- The server does not write to `.sentinelrc` if the file already contains a `directoryColors` entry for the directory being indexed.
 
-**`packages/shared`** — unit tests for all utility functions: impact scoring, debounce logic, graph serialization helpers, session summary computation.
+### `packages/shared` — unit tests
 
-**`packages/reviewer`** (Phase 2):
+- Debounce logic: multiple triggers within the window produce one output; a trigger after the window produces a new output.
+- Graph serialization: round-trip serialize and deserialize a Graphology instance, assert structural equality including all node and edge attributes.
+- Session summary: correct cumulative counts across a sequence of add, modify, and delete events including multi-file batch events.
+- Directory color generation:
+  - The same directory path always produces the same hex color on any input (determinism).
+  - Generated hues are never within 30 degrees of reserved event hues (green=120, blue=220, red=0, amber=40, orange=25).
+  - A color present in `.sentinelrc` is used as-is; the hash algorithm is not called.
+  - A directory not in `.sentinelrc` generates a color and the entry is appended without modifying existing entries.
 
-- Review findings conform to the `contracts` Zod schema (parse without throwing).
-- The reviewer correctly returns no findings for an empty diff.
-- `p-limit` concurrency is respected — no more than N concurrent Anthropic API calls at once.
-- Unit tests mock the Anthropic SDK with `vi.mock`. Integration tests against the real API are tagged `[slow]` and excluded from the default test run.
-
-### Testing Tools
+### Testing tools
 
 - **Vitest** across all packages.
-- **@vitest/coverage-v8** for coverage reports.
-- In-memory Graphology instances in all analyzer tests — no filesystem I/O required.
+- **@vitest/coverage-v8** for coverage reporting.
+- Analyzer tests use in-memory Graphology instances and temporary TypeScript fixture files — no real project filesystem required.
+- Server integration tests use a real chokidar watcher against a controlled temporary fixture directory created and destroyed per test.
+- WebSocket tests use a real WebSocket server bound to a random port — no mocking of the transport layer.
+
+---
+
+## Phase 2 Scope (reference)
+
+The following are out of scope for Phase 1. No Phase 1 architectural decision requires rework to accommodate them — Phase 2 is purely additive.
+
+### AI reviewer (`packages/reviewer`)
+
+Multi-pass code analysis triggered on demand (`⌘R` on a selected node) or automatically on file save (configurable). Each pass uses the Anthropic SDK with streaming enabled. Findings are delivered as structured tool-use output conforming to a `contracts` schema, streamed to the UI in real time.
+
+- **Pass 1 — Logic & bugs**: per-file, runs automatically on every change. Fast.
+- **Pass 2 — Security**: runs on files matching auth/input/crypto patterns.
+- **Pass 3 — Cross-file coherence**: on-demand only. Verifies all callers of a modified function have been updated consistently.
+
+Findings appear as severity rings on graph nodes (red = error, amber = warning) and in a Review tab added to the existing node detail panel. Symbol-level change tracking in the Symbols tab (which specific functions changed this session, caller counts per changed symbol) is also implemented in Phase 2 using `@typescript-eslint/parser` for AST analysis.
+
+### Electron desktop app (`apps/desktop`)
+
+Self-contained app with native OS integration. No terminal required. Auto-updates via GitHub Releases.
+
+### Claude Code agent hook integration
+
+PreToolUse hooks pre-warm blast radius computation before the filesystem event fires. PostToolUse hooks correlate filesystem changes to specific agent tool calls for attribution in the timeline. Both hooks are registered automatically via `npx sentinel setup` which writes to `.claude/hooks/` in the project directory.
