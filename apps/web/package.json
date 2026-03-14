@@ -1,28 +1,38 @@
 {
-  "name": "web",
-  "version": "0.1.0",
-  "type": "module",
+  "name": "@sentinel/web",
+  "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev --port 3000",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint --max-warnings 0",
-    "check-types": "next typegen && tsc --noEmit"
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "test": "vitest run --passWithNoTests",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@repo/ui": "*",
-    "next": "16.1.5",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "@react-sigma/core": "^5.0.6",
+    "@sentinel/contracts": "workspace:*",
+    "@sentinel/shared": "workspace:*",
+    "@tanstack/react-query": "^5.75.0",
+    "@tanstack/react-router": "^1.120.0",
+    "framer-motion": "^12.9.4",
+    "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
+    "graphology-layout-noverlap": "^0.4.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "sigma": "^3.0.0",
+    "zustand": "^5.0.5"
   },
   "devDependencies": {
-    "@repo/eslint-config": "*",
-    "@repo/typescript-config": "*",
-    "@types/node": "^22.15.3",
-    "@types/react": "19.2.2",
-    "@types/react-dom": "19.2.2",
-    "eslint": "^9.39.1",
-    "typescript": "5.9.2"
+    "@tailwindcss/vite": "^4.1.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.0",
+    "tailwindcss": "^4.1.4",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "^3.1.0"
   }
 }

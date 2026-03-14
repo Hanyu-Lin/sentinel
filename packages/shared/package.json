@@ -1,0 +1,23 @@
+{
+  "name": "@sentinel/shared",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./scoring": {
+      "import": "./src/scoring.ts",
+      "types": "./src/scoring.ts"
+    },
+    "./debounce": {
+      "import": "./src/debounce.ts",
+      "types": "./src/debounce.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "vitest": "^3.1.0"
+  }
+}

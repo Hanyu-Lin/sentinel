@@ -1,0 +1,27 @@
+{
+  "name": "@sentinel/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "build": "node scripts/cli.ts build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "start": "node dist/index.mjs"
+  },
+  "dependencies": {
+    "@sentinel/analyzer": "workspace:*",
+    "@sentinel/contracts": "workspace:*",
+    "@sentinel/shared": "workspace:*",
+    "chokidar": "^4.0.3",
+    "ws": "^8.18.1",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.1",
+    "tsdown": "^0.20.3",
+    "typescript": "5.9.2",
+    "vitest": "^3.1.0"
+  }
+}
