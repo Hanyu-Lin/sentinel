@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { GraphDiffSchema, GraphNodeSchema, GraphEdgeSchema } from "./graph";
-import { BlastRadiusSchema } from "./blastRadius";
+import { GraphDiffSchema, GraphNodeSchema, GraphEdgeSchema, CircularDepSchema } from "./graph";
+import { SessionEventSchema, EventTypeSchema } from "./session";
 
 // Server → Client messages
 export const ServerMessageSchema = z.discriminatedUnion("type", [
@@ -8,27 +8,39 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("graph.snapshot"),
     nodes: z.array(GraphNodeSchema),
     edges: z.array(GraphEdgeSchema),
+    sessionHistory: z.array(SessionEventSchema),
+    activeCircularDeps: z.array(CircularDepSchema),
   }),
   z.object({
     type: z.literal("graph.diff"),
     diff: GraphDiffSchema,
   }),
   z.object({
-    type: z.literal("graph.blastRadius"),
-    blastRadius: BlastRadiusSchema,
-  }),
-  z.object({
     type: z.literal("session.changeEvent"),
-    filePath: z.string(),
+    id: z.string(),
+    filePaths: z.array(z.string()),
+    eventTypes: z.array(EventTypeSchema),
     timestamp: z.number(),
-    blastRadiusCount: z.number(),
-    agentToolCall: z.string().optional(),
+    blastRadius: z.object({
+      downstream: z.number(),
+      upstream: z.number(),
+    }),
   }),
   z.object({
     type: z.literal("session.summary"),
-    totalFilesChanged: z.number(),
-    totalNodesImpacted: z.number(),
-    largestBlastRadius: z.number(),
+    filesAdded: z.number(),
+    filesModified: z.number(),
+    filesDeleted: z.number(),
+    uniqueDownstreamNodes: z.number(),
+  }),
+  z.object({
+    type: z.literal("session.reset"),
+  }),
+  z.object({
+    type: z.literal("indexing.progress"),
+    filesDiscovered: z.number(),
+    currentFile: z.string().optional(),
+    done: z.boolean(),
   }),
 ]);
 
@@ -38,16 +50,17 @@ export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("config.update"),
-    watchPaths: z.array(z.string()).optional(),
-    ignorePaths: z.array(z.string()).optional(),
+    targetDir: z.string().optional(),
+    exclude: z.array(z.string()).optional(),
+    focusMode: z.enum(["hide", "dim"]).optional(),
+    blastRadiusDirection: z.enum(["downstream", "both"]).optional(),
   }),
   z.object({
     type: z.literal("session.reset"),
   }),
   z.object({
-    type: z.literal("pin.node"),
+    type: z.literal("node.togglePin"),
     nodeId: z.string(),
-    pinned: z.boolean(),
   }),
 ]);
 
