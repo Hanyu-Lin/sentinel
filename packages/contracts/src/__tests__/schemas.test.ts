@@ -60,6 +60,9 @@ describe("GraphNodeSchema", () => {
     const { inDegree: _, ...bad } = validNode;
     const result = GraphNodeSchema.safeParse(bad);
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.includes("inDegree"))).toBe(true);
+    }
   });
 
   it("rejects node with non-integer inDegree", () => {
@@ -79,6 +82,14 @@ describe("GraphEdgeSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("parses edge with optional importType", () => {
+    const result = GraphEdgeSchema.safeParse({
+      ...validEdge,
+      importType: "named" as const,
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects invalid edgeType", () => {
     const result = GraphEdgeSchema.safeParse({ ...validEdge, edgeType: "other" });
     expect(result.success).toBe(false);
@@ -93,6 +104,14 @@ describe("CircularDepSchema", () => {
 
   it("rejects missing cycleNodeIds", () => {
     const result = CircularDepSchema.safeParse({ id: "cycle-1" });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.includes("cycleNodeIds"))).toBe(true);
+    }
+  });
+
+  it("rejects missing id", () => {
+    const result = CircularDepSchema.safeParse({ cycleNodeIds: ["a.ts", "b.ts"] });
     expect(result.success).toBe(false);
   });
 });
@@ -139,6 +158,12 @@ describe("GraphDiffSchema", () => {
     const result = GraphDiffSchema.safeParse(bad);
     expect(result.success).toBe(false);
   });
+
+  it("rejects diff missing resolvedCircularDeps", () => {
+    const { resolvedCircularDeps: _, ...bad } = validDiff;
+    const result = GraphDiffSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("SessionEventSchema", () => {
@@ -157,6 +182,12 @@ describe("SessionEventSchema", () => {
 
   it("rejects invalid eventType", () => {
     const result = SessionEventSchema.safeParse({ ...validEvent, eventTypes: ["saved"] });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects missing blastRadiusCounts", () => {
+    const { blastRadiusCounts: _, ...bad } = validEvent;
+    const result = SessionEventSchema.safeParse(bad);
     expect(result.success).toBe(false);
   });
 });
@@ -218,6 +249,36 @@ describe("ServerMessageSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("parses session.summary", () => {
+    const result = ServerMessageSchema.safeParse({
+      type: "session.summary",
+      filesAdded: 1,
+      filesModified: 2,
+      filesDeleted: 0,
+      uniqueDownstreamNodes: 5,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("parses indexing.progress", () => {
+    const result = ServerMessageSchema.safeParse({
+      type: "indexing.progress",
+      filesDiscovered: 42,
+      currentFile: "src/index.ts",
+      done: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("parses indexing.progress without optional currentFile", () => {
+    const result = ServerMessageSchema.safeParse({
+      type: "indexing.progress",
+      filesDiscovered: 0,
+      done: true,
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("ClientMessageSchema", () => {
@@ -251,6 +312,15 @@ describe("ClientMessageSchema", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("parses config.update with targetDir and exclude", () => {
+    const result = ClientMessageSchema.safeParse({
+      type: "config.update",
+      targetDir: "/path/to/repo",
+      exclude: ["**/node_modules", "**/*.test.ts"],
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("Round-trip serialization", () => {
@@ -276,8 +346,78 @@ describe("Round-trip serialization", () => {
     expect(reparsed).toEqual(parsed);
   });
 
+  it("serializes and parses session.changeEvent", () => {
+    const msg = {
+      type: "session.changeEvent" as const,
+      id: "evt-1",
+      filePaths: ["src/index.ts"],
+      eventTypes: ["modified"],
+      timestamp: 1_700_000_000_000,
+      blastRadius: { downstream: 3, upstream: 1 },
+    };
+    const parsed = ServerMessageSchema.parse(msg);
+    const json = JSON.stringify(parsed);
+    const reparsed = ServerMessageSchema.parse(JSON.parse(json));
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it("serializes and parses session.summary", () => {
+    const msg = {
+      type: "session.summary" as const,
+      filesAdded: 1,
+      filesModified: 2,
+      filesDeleted: 0,
+      uniqueDownstreamNodes: 5,
+    };
+    const parsed = ServerMessageSchema.parse(msg);
+    const json = JSON.stringify(parsed);
+    const reparsed = ServerMessageSchema.parse(JSON.parse(json));
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it("serializes and parses session.reset (server)", () => {
+    const msg = { type: "session.reset" as const };
+    const parsed = ServerMessageSchema.parse(msg);
+    const json = JSON.stringify(parsed);
+    const reparsed = ServerMessageSchema.parse(JSON.parse(json));
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it("serializes and parses indexing.progress", () => {
+    const msg = {
+      type: "indexing.progress" as const,
+      filesDiscovered: 10,
+      currentFile: "src/a.ts",
+      done: false,
+    };
+    const parsed = ServerMessageSchema.parse(msg);
+    const json = JSON.stringify(parsed);
+    const reparsed = ServerMessageSchema.parse(JSON.parse(json));
+    expect(reparsed).toEqual(parsed);
+  });
+
   it("serializes and parses node.togglePin", () => {
     const msg = { type: "node.togglePin" as const, nodeId: "src/index.ts" };
+    const parsed = ClientMessageSchema.parse(msg);
+    const json = JSON.stringify(parsed);
+    const reparsed = ClientMessageSchema.parse(JSON.parse(json));
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it("serializes and parses session.reset (client)", () => {
+    const msg = { type: "session.reset" as const };
+    const parsed = ClientMessageSchema.parse(msg);
+    const json = JSON.stringify(parsed);
+    const reparsed = ClientMessageSchema.parse(JSON.parse(json));
+    expect(reparsed).toEqual(parsed);
+  });
+
+  it("serializes and parses config.update", () => {
+    const msg = {
+      type: "config.update" as const,
+      focusMode: "dim",
+      blastRadiusDirection: "both",
+    };
     const parsed = ClientMessageSchema.parse(msg);
     const json = JSON.stringify(parsed);
     const reparsed = ClientMessageSchema.parse(JSON.parse(json));
